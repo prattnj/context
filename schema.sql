@@ -13,7 +13,7 @@ USE context;
 CREATE TABLE IF NOT EXISTS conversations (
   id            INT UNSIGNED     NOT NULL AUTO_INCREMENT,
   address_key   VARCHAR(512)     NOT NULL,
-  display_name  VARCHAR(255)     NOT NULL DEFAULT '',
+  display_name  VARCHAR(1024)    NOT NULL DEFAULT '',
   is_group      TINYINT(1)       NOT NULL DEFAULT 0,
   PRIMARY KEY (id),
   UNIQUE KEY uq_conversations_address_key (address_key)
@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS messages (
   direction       ENUM('received','sent') NOT NULL,
   -- For group messages, who sent it (normalized number); NULL for 1:1.
   sender_address  VARCHAR(64)      NULL,
-  contact_name    VARCHAR(255)     NOT NULL DEFAULT '',
+  contact_name    VARCHAR(1024)    NOT NULL DEFAULT '',
   body            MEDIUMTEXT       NULL,
   char_count      INT UNSIGNED     NOT NULL DEFAULT 0,
   date_ms         BIGINT UNSIGNED  NOT NULL,       -- epoch millis (UTC)

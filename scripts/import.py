@@ -97,6 +97,11 @@ def nz(value):
     return None if value is None or value == "null" else value
 
 
+def clamp(text: str, limit: int) -> str:
+    """Keep values inside column size limits."""
+    return text if len(text) <= limit else text[:limit]
+
+
 class Importer:
     def __init__(self, conn, media_dir: Path):
         self.conn = conn
@@ -108,6 +113,10 @@ class Importer:
     # -- conversations ------------------------------------------------------
 
     def conversation_id(self, address_key: str, display_name: str, is_group: bool) -> int:
+        display_name = clamp(display_name, 1024)
+        # Very large groups can exceed the address_key column; fall back to a hash.
+        if len(address_key) > 512:
+            address_key = "group:" + sha1(address_key)
         cached = self.conv_cache.get(address_key)
         with self.conn.cursor() as cur:
             if cached is None:
@@ -140,7 +149,7 @@ class Importer:
                 " body, char_count, date_ms, local_date, local_month, local_hour, "
                 " has_media, dedupe_hash) "
                 "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                (conv_id, kind, direction, sender_address, contact_name or "",
+                (conv_id, kind, direction, sender_address, clamp(contact_name or "", 1024),
                  body, len(body or ""), date_ms, local_date, local_month,
                  local_hour, int(has_media), dedupe),
             )
