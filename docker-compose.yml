@@ -1,0 +1,27 @@
+services:
+  context:
+    build: .
+    container_name: context
+    restart: unless-stopped
+    ports:
+      - "${PORT_CONTEXT}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      STATIC_DIR: /app/frontend/dist
+      MEDIA_DIR: /app/data/media
+      # MySQL runs on the host machine, not in Docker.
+      DB_HOST: host.docker.internal
+      DB_PORT: ${DB_PORT:-3306}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME:-context}
+      APP_PASSWORD: ${APP_PASSWORD}
+      SESSION_SECRET: ${SESSION_SECRET}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+    volumes:
+      # Media extracted by scripts/import.py; read by the server.
+      - ./data/media:/app/data/media:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

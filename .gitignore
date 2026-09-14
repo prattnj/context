@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+
+# Raw exports and extracted media never belong in git
+data/
+
+__pycache__/
+*.pyc
