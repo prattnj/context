@@ -84,15 +84,17 @@ router.get('/stats', async (req, res, next) => {
        FROM calls WHERE ${where}`, p);
 
     const [longestCall] = await query(
-      `SELECT contact_name AS name, number, duration_s AS seconds, date_ms AS dateMs
+      `SELECT COALESCE(NULLIF(NULLIF(contact_name, ''), '(Unknown)'), number) AS name,
+              number, duration_s AS seconds, date_ms AS dateMs
        FROM calls WHERE ${where} AND duration_s > 0
        ORDER BY duration_s DESC LIMIT 1`, p);
 
     const topCalled = await query(
-      `SELECT COALESCE(NULLIF(contact_name, ''), number) AS name,
+      `SELECT number,
+              COALESCE(NULLIF(NULLIF(MAX(contact_name), ''), '(Unknown)'), number) AS name,
               COUNT(*) AS total, SUM(duration_s) AS totalSeconds
        FROM calls WHERE ${where}
-       GROUP BY name ORDER BY total DESC LIMIT 5`, p);
+       GROUP BY number ORDER BY total DESC LIMIT 5`, p);
 
     res.json({
       totals, topContacts, busiestDays,
