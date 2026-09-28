@@ -6,7 +6,17 @@ import { api, type Summary } from '../api'
 export default function MonthSummary({ month }: { month: string }) {
   const [summary, setSummary] = useState<Summary | null>(null)
   const [busy, setBusy] = useState(false)
+  const [slow, setSlow] = useState(false)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!busy) {
+      setSlow(false)
+      return
+    }
+    const timer = setTimeout(() => setSlow(true), 8000)
+    return () => clearTimeout(timer)
+  }, [busy])
 
   useEffect(() => {
     let cancelled = false
@@ -27,7 +37,11 @@ export default function MonthSummary({ month }: { month: string }) {
     try {
       setSummary(await api.generateSummary(month, force))
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to generate summary')
+      if (e instanceof DOMException && e.name === 'TimeoutError') {
+        setError('Summary generation timed out. Please try again.')
+      } else {
+        setError(e instanceof Error ? e.message : 'Failed to generate summary')
+      }
     } finally {
       setBusy(false)
     }
@@ -67,6 +81,11 @@ export default function MonthSummary({ month }: { month: string }) {
           </button>
         )}
       </div>
+      {busy && slow && (
+        <p className="mt-3 text-xs text-zinc-500">
+          Still working… the model is busy, retrying automatically.
+        </p>
+      )}
       {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
       {summary && (
         <div className="mt-3">

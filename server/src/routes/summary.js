@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { query } from '../db.js';
+import { generateContent, GeminiError } from '../gemini.js';
 
 const router = Router();
-const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const MODEL = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
 const MAX_MESSAGES = 6000;
 
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -67,25 +68,16 @@ router.post('/summaries/:month', async (req, res, next) => {
       transcript,
     ].join('');
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': process.env.GEMINI_API_KEY,
-      },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.7 },
-      }),
-    });
-
-    if (!resp.ok) {
-      const detail = await resp.text();
-      return res.status(502).json({ error: `Gemini API error (${resp.status})`, detail: detail.slice(0, 500) });
+    let data;
+    try {
+      data = await generateContent(MODEL, prompt);
+    } catch (err) {
+      if (err instanceof GeminiError) {
+        return res.status(502).json({ error: err.message, detail: err.detail });
+      }
+      throw err;
     }
 
-    const data = await resp.json();
     const summary = data?.candidates?.[0]?.content?.parts
       ?.map((part) => part.text || '')
       .join('')

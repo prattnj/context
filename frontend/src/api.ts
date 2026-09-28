@@ -143,11 +143,13 @@ class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit & { timeoutMs?: number }): Promise<T> {
+  const { timeoutMs, ...rest } = init ?? {}
   const res = await fetch(path, {
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
-    ...init,
+    ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
+    ...rest,
   })
   if (!res.ok) {
     let message = res.statusText
@@ -179,7 +181,10 @@ export const api = {
     ),
   getSummary: (month: string) => request<Summary | null>(`/api/summaries/${month}`),
   generateSummary: (month: string, force = false) =>
-    request<Summary>(`/api/summaries/${month}${force ? '?force=1' : ''}`, { method: 'POST' }),
+    request<Summary>(`/api/summaries/${month}${force ? '?force=1' : ''}`, {
+      method: 'POST',
+      timeoutMs: 120_000,
+    }),
 }
 
 export { ApiError }
