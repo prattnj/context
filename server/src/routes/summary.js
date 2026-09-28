@@ -35,9 +35,10 @@ router.post('/summaries/:month', async (req, res, next) => {
 
     const messages = await query(
       `SELECT c.display_name AS name, c.is_group AS isGroup,
-              m.direction, m.sender_address AS sender, m.body,
-              m.local_date AS date, m.has_media AS hasMedia
+              m.direction, m.sender_address AS sender, cn.name AS senderName,
+              m.body, m.local_date AS date, m.has_media AS hasMedia
        FROM messages m JOIN conversations c ON c.id = m.conversation_id
+       LEFT JOIN contact_names cn ON cn.number = m.sender_address
        WHERE m.local_month = ?
        ORDER BY m.date_ms ASC
        LIMIT ?`,
@@ -51,7 +52,9 @@ router.post('/summaries/:month', async (req, res, next) => {
       .map((m) => {
         const who = m.direction === 'sent'
           ? 'Me'
-          : m.isGroup && m.sender ? `${m.name} (${m.sender})` : m.name || 'Unknown';
+          : m.isGroup && m.sender
+            ? `${m.senderName || m.sender} in ${m.name}`
+            : m.name || 'Unknown';
         const body = (m.body || '').replace(/\s+/g, ' ').slice(0, 400);
         const media = m.hasMedia ? ' [attachment]' : '';
         return `${m.date} | ${who}: ${body}${media}`;

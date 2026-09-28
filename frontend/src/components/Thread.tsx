@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import { faArrowLeft, faCircleNotch, faUserGroup, faFile } from '@fortawesome/free-solid-svg-icons'
 import { api, type Conversation, type Message } from '../api'
-import { formatDateMs, type TimeRange } from '../lib/time'
+import { formatDateMs, formatPhone, type TimeRange } from '../lib/time'
 
 const PAGE = 200
 
@@ -83,11 +83,19 @@ export default function Thread({ conversation, range, onBack }: Props) {
         </button>
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium text-zinc-100">
-            {conversation.name || conversation.addressKey}
+            {conversation.name || formatPhone(conversation.addressKey)}
             {conversation.isGroup ? (
               <FontAwesomeIcon icon={faUserGroup} className="ml-2 text-xs text-zinc-500" />
             ) : null}
           </div>
+          {conversation.isGroup && conversation.participants.length > 0 && (
+            <div
+              className="truncate text-xs text-zinc-400"
+              title={conversation.participants.join(', ')}
+            >
+              {conversation.participants.join(', ')}
+            </div>
+          )}
           <div className="text-xs text-zinc-500">
             {total.toLocaleString()} messages · {range.label}
           </div>
@@ -156,7 +164,9 @@ function Bubble({ message: m, isGroup }: { message: Message; isGroup: boolean })
     <div className={`mb-1.5 flex ${sent ? 'justify-end' : 'justify-start'}`}>
       <div className="max-w-[75%] sm:max-w-[60%]">
         {isGroup && !sent && m.senderAddress && (
-          <div className="mb-0.5 ml-1 text-[11px] text-zinc-500">{m.senderAddress}</div>
+          <div className="mb-0.5 ml-1 text-[11px] text-zinc-500">
+            {m.senderName || formatPhone(m.senderAddress)}
+          </div>
         )}
         <div
           title={formatDateMs(m.dateMs)}

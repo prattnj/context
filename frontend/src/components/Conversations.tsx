@@ -7,7 +7,7 @@ import {
   faMagnifyingGlass,
 } from '@fortawesome/free-solid-svg-icons'
 import { api, type Conversation } from '../api'
-import { formatNumber, type TimeRange } from '../lib/time'
+import { formatNumber, formatPhone, type TimeRange } from '../lib/time'
 
 interface Props {
   range: TimeRange
@@ -43,7 +43,10 @@ export default function Conversations({ range, onOpen }: Props) {
   if (error) return <p className="py-12 text-center text-red-400">{error}</p>
 
   const filtered = conversations.filter((c) =>
-    (c.name || c.addressKey).toLowerCase().includes(filter.toLowerCase()),
+    [c.name || c.addressKey, ...c.participants]
+      .join(' ')
+      .toLowerCase()
+      .includes(filter.toLowerCase()),
   )
 
   return (
@@ -76,8 +79,11 @@ export default function Conversations({ range, onOpen }: Props) {
                 )}
               </div>
               <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium text-zinc-200">
-                  {c.name || c.addressKey}
+                <div
+                  className="truncate text-sm font-medium text-zinc-200"
+                  title={c.participants.length ? c.participants.join(', ') : undefined}
+                >
+                  {c.name || formatPhone(c.addressKey)}
                 </div>
                 <div className="text-xs text-zinc-500">
                   {formatNumber(c.sent)} sent · {formatNumber(c.received)} received

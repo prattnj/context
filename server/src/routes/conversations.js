@@ -14,13 +14,37 @@ function range(req) {
   return [start, end];
 }
 
+function parseNames(value) {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+// Resolve group-message sender numbers to contact names.
+async function senderNames(numbers) {
+  if (!numbers.length) return {};
+  const map = {};
+  const hints = await query(
+    'SELECT number, name FROM contact_names WHERE number IN (?)', [numbers]);
+  for (const row of hints) map[row.number] = row.name;
+  const oneToOne = await query(
+    `SELECT address_key AS number, display_name AS name FROM conversations
+     WHERE is_group = 0 AND display_name <> '' AND address_key IN (?)`, [numbers]);
+  for (const row of oneToOne) map[row.number] = row.name;
+  return map;
+}
+
 // Conversations active in the given range, most active first.
 router.get('/conversations', async (req, res, next) => {
   try {
     const [start, end] = range(req);
     const rows = await query(
       `SELECT c.id, c.display_name AS name, c.address_key AS addressKey,
-              c.is_group AS isGroup,
+              c.is_group AS isGroup, c.participant_names AS participantNames,
               COUNT(*) AS total,
               SUM(m.direction = 'sent')     AS sent,
               SUM(m.direction = 'received') AS received,
@@ -30,7 +54,10 @@ router.get('/conversations', async (req, res, next) => {
        GROUP BY c.id
        ORDER BY total DESC`,
       [start, end]);
-    res.json(rows);
+    res.json(rows.map(({ participantNames, ...row }) => ({
+      ...row,
+      participants: parseNames(participantNames),
+    })));
   } catch (err) { next(err); }
 });
 
@@ -67,10 +94,18 @@ router.get('/conversations/:id/messages', async (req, res, next) => {
        WHERE conversation_id = ? AND local_date BETWEEN ? AND ?`,
       [id, start, end]);
 
+    const names = await senderNames([
+      ...new Set(messages.map((m) => m.senderAddress).filter(Boolean)),
+    ]);
+
     res.json({
       total,
       offset,
-      messages: messages.map((m) => ({ ...m, media: mediaByMessage[m.id] || [] })),
+      messages: messages.map((m) => ({
+        ...m,
+        senderName: m.senderAddress ? names[m.senderAddress] || null : null,
+        media: mediaByMessage[m.id] || [],
+      })),
     });
   } catch (err) { next(err); }
 });

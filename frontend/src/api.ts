@@ -77,6 +77,7 @@ export interface Conversation {
   name: string
   addressKey: string
   isGroup: number
+  participants: string[]
   total: number
   sent: number
   received: number
@@ -95,6 +96,7 @@ export interface Message {
   kind: 'sms' | 'mms'
   direction: 'sent' | 'received'
   senderAddress: string | null
+  senderName: string | null
   body: string | null
   dateMs: number
   hasMedia: number

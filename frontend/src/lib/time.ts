@@ -86,3 +86,15 @@ export function formatDuration(totalSeconds: number): string {
 export function formatNumber(n: number | null | undefined): string {
   return (n ?? 0).toLocaleString()
 }
+
+/** Format a normalized phone number the way a phone app would. */
+export function formatPhone(raw: string | null | undefined): string {
+  if (!raw) return 'Unknown'
+  if (raw.includes('@')) return raw
+  let digits = raw.replace(/\D/g, '')
+  if (digits.length === 11 && digits.startsWith('1')) digits = digits.slice(1)
+  if (digits.length === 10)
+    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`
+  if (digits.length === 7) return `${digits.slice(0, 3)}-${digits.slice(3)}`
+  return raw
+}

@@ -20,6 +20,7 @@ project root): DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME.
 import argparse
 import base64
 import hashlib
+import json
 import os
 import re
 import sys
@@ -102,33 +103,158 @@ def clamp(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit]
 
 
+UNKNOWN_NAMES = {"", "(unknown)", "unknown", "null"}
+GROUP_NAME_LIMIT = 3  # names shown before "& N others"
+
+
+def is_real_name(name: str) -> bool:
+    """True when the value looks like a contact name rather than a number."""
+    name = (name or "").strip()
+    if name.lower() in UNKNOWN_NAMES:
+        return False
+    return any(ch.isalpha() for ch in name)
+
+
+def pretty_number(number: str) -> str:
+    """Format a normalized number the way a phone app would."""
+    if not number:
+        return "Unknown"
+    if "@" in number:
+        return number
+    digits = re.sub(r"[^\d]", "", number)
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    if len(digits) == 10:
+        return f"({digits[:3]}) {digits[3:6]}-{digits[6:]}"
+    if len(digits) == 7:
+        return f"{digits[:3]}-{digits[3:]}"
+    return number
+
+
+def short_names(names: list[str]) -> list[str]:
+    """First names, disambiguated with a last initial when they collide."""
+    firsts = [n.split()[0] if n.split() else n for n in names]
+    counts = {}
+    for f in firsts:
+        counts[f] = counts.get(f, 0) + 1
+    out = []
+    for full, first in zip(names, firsts):
+        rest = full.split()[1:]
+        if counts[first] > 1 and rest:
+            out.append(f"{first} {rest[-1][0]}.")
+        else:
+            out.append(first)
+    return out
+
+
+def group_display_name(labels: list[str]) -> str:
+    """Google Messages style: "Alice, Bob, Carol & 4 others"."""
+    if not labels:
+        return ""
+    if len(labels) <= GROUP_NAME_LIMIT:
+        return ", ".join(labels)
+    extra = len(labels) - GROUP_NAME_LIMIT
+    shown = ", ".join(labels[:GROUP_NAME_LIMIT])
+    return f"{shown} & {extra} other{'s' if extra != 1 else ''}"
+
+
+def ensure_schema(conn) -> None:
+    """Add columns/tables introduced after the initial schema.sql."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = DATABASE() AND table_name = 'conversations'")
+        existing = {row[0].lower() for row in cur.fetchall()}
+        if "participants" not in existing:
+            cur.execute("ALTER TABLE conversations ADD COLUMN participants MEDIUMTEXT NULL")
+        if "participant_names" not in existing:
+            cur.execute(
+                "ALTER TABLE conversations ADD COLUMN participant_names MEDIUMTEXT NULL")
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS contact_names ("
+            "  number VARCHAR(64) NOT NULL,"
+            "  name VARCHAR(255) NOT NULL,"
+            "  PRIMARY KEY (number)"
+            ") ENGINE=InnoDB")
+    conn.commit()
+
+
 class Importer:
     def __init__(self, conn, media_dir: Path):
         self.conn = conn
         self.media_dir = media_dir
         self.conv_cache: dict[str, int] = {}
+        # number -> best known contact name, harvested while streaming.
+        self.name_hints: dict[str, str] = {}
+        # Names inferred from group contact_name lists (lower confidence).
+        self.weak_hints: dict[str, str] = {}
         self.stats = {"sms_new": 0, "mms_new": 0, "skipped": 0,
                       "calls_new": 0, "calls_skipped": 0, "media_files": 0}
 
+    # -- contact names ------------------------------------------------------
+
+    def record_name(self, number: str, name: str) -> None:
+        if number and is_real_name(name):
+            self.name_hints[number] = clamp(name.strip(), 255)
+
+    def learn_group_names(self, participants: list[str], contact: str) -> None:
+        """SMS Backup & Restore writes a group's contact_name as a comma-joined
+        list in participant order. Pair names to numbers only when the counts
+        line up, and treat the result as a weak hint (never overrides a name
+        learned from a 1:1 thread or the call log)."""
+        parts = [p.strip() for p in (contact or "").split(",")]
+        if len(parts) != len(participants):
+            return
+        for number, name in zip(participants, parts):
+            if number and is_real_name(name):
+                self.weak_hints[number] = clamp(name, 255)
+
+    def flush_names(self) -> None:
+        with self.conn.cursor() as cur:
+            if self.weak_hints:
+                cur.executemany(
+                    "INSERT IGNORE INTO contact_names (number, name) VALUES (%s, %s)",
+                    list(self.weak_hints.items()),
+                )
+            if self.name_hints:
+                cur.executemany(
+                    "INSERT INTO contact_names (number, name) VALUES (%s, %s) "
+                    "ON DUPLICATE KEY UPDATE name = VALUES(name)",
+                    list(self.name_hints.items()),
+                )
+        self.conn.commit()
+
     # -- conversations ------------------------------------------------------
 
-    def conversation_id(self, address_key: str, display_name: str, is_group: bool) -> int:
+    def conversation_id(self, address_key: str, display_name: str, is_group: bool,
+                        participants: list[str] | None = None) -> int:
         display_name = clamp(display_name, 1024)
         # Very large groups can exceed the address_key column; fall back to a hash.
         if len(address_key) > 512:
             address_key = "group:" + sha1(address_key)
+        participants_csv = ",".join(participants) if participants else None
         cached = self.conv_cache.get(address_key)
         with self.conn.cursor() as cur:
             if cached is None:
+                # Group names are rebuilt from participants after the import,
+                # so the raw (often "(Unknown)"-laden) label is not stored.
                 cur.execute(
-                    "INSERT INTO conversations (address_key, display_name, is_group) "
-                    "VALUES (%s, %s, %s) "
+                    "INSERT INTO conversations "
+                    "(address_key, display_name, is_group, participants) "
+                    "VALUES (%s, %s, %s, %s) "
                     "ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)",
-                    (address_key, display_name, int(is_group)),
+                    (address_key, "" if is_group else display_name,
+                     int(is_group), participants_csv),
                 )
                 cached = cur.lastrowid
                 self.conv_cache[address_key] = cached
-            if display_name and display_name != "(Unknown)":
+                if participants_csv:
+                    cur.execute(
+                        "UPDATE conversations SET participants = %s WHERE id = %s "
+                        "AND (participants IS NULL OR participants <> %s)",
+                        (participants_csv, cached, participants_csv),
+                    )
+            if not is_group and is_real_name(display_name):
                 cur.execute(
                     "UPDATE conversations SET display_name = %s "
                     "WHERE id = %s AND display_name <> %s",
@@ -164,6 +290,7 @@ class Importer:
         body = nz(el.get("body")) or ""
         contact = nz(el.get("contact_name")) or ""
         dedupe = sha1(f"sms|{date_ms}|{addr}|{msg_type}|{body}")
+        self.record_name(addr, contact)
         conv_id = self.conversation_id(addr, contact, False)
         row_id = self.insert_message(
             conv_id, "sms", "received" if msg_type == "1" else "sent",
@@ -195,6 +322,10 @@ class Importer:
             participants = [normalize_number(el.get("address") or "")]
         is_group = len(participants) > 1
         address_key = ",".join(sorted(participants))
+        if is_group:
+            self.learn_group_names(participants, contact)
+        elif participants[0]:
+            self.record_name(participants[0], contact)
 
         texts, media_parts = [], []
         parts = el.find("parts")
@@ -213,7 +344,7 @@ class Importer:
             sha1((p.get("data") or "")[:512]) for p in media_parts)
         dedupe = sha1(f"mms|{date_ms}|{address_key}|{msg_box}|{body}|{media_sig}")
 
-        conv_id = self.conversation_id(address_key, contact, is_group)
+        conv_id = self.conversation_id(address_key, contact, is_group, participants)
         sender_address = sender if is_group and msg_box == "1" else None
         row_id = self.insert_message(
             conv_id, "mms", "received" if msg_box == "1" else "sent",
@@ -259,6 +390,7 @@ class Importer:
         duration = int(el.get("duration") or 0)
         contact = nz(el.get("contact_name")) or ""
         dedupe = sha1(f"call|{date_ms}|{number}|{call_type}|{duration}")
+        self.record_name(number, contact)
         local_date, local_month, local_hour = local_buckets(date_ms)
         with self.conn.cursor() as cur:
             cur.execute(
@@ -272,6 +404,65 @@ class Importer:
                 self.stats["calls_new"] += 1
             else:
                 self.stats["calls_skipped"] += 1
+
+
+def load_name_map(conn) -> dict[str, str]:
+    """number -> display name, weakest source first so better ones win."""
+    names: dict[str, str] = {}
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT number, MAX(contact_name) FROM calls "
+            "WHERE contact_name <> '' GROUP BY number")
+        for number, name in cur.fetchall():
+            if is_real_name(name):
+                names[number] = name.strip()
+        cur.execute(
+            "SELECT address_key, display_name FROM conversations WHERE is_group = 0")
+        for number, name in cur.fetchall():
+            if is_real_name(name):
+                names[number] = name.strip()
+        cur.execute("SELECT number, name FROM contact_names")
+        for number, name in cur.fetchall():
+            if is_real_name(name):
+                names[number] = name.strip()
+    return names
+
+
+def rebuild_group_names(conn) -> int:
+    """Name every group thread after its participants, Google Messages style."""
+    names = load_name_map(conn)
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, address_key, participants FROM conversations WHERE is_group = 1")
+        rows = cur.fetchall()
+
+    updated = 0
+    for conv_id, address_key, participants in rows:
+        raw = participants or ("" if address_key.startswith("group:") else address_key)
+        numbers = [n for n in (p.strip() for p in raw.split(",")) if n]
+        if not numbers:
+            continue
+
+        known = sorted(
+            ((n, names[n]) for n in numbers if n in names),
+            key=lambda pair: pair[1].lower())
+        unknown = [n for n in numbers if n not in names]
+
+        full_names = [name for _, name in known] + [pretty_number(n) for n in unknown]
+        labels = short_names([name for _, name in known]) + \
+            [pretty_number(n) for n in unknown]
+        display = clamp(group_display_name(labels), 1024)
+        if not display:
+            continue
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE conversations SET display_name = %s, participant_names = %s "
+                "WHERE id = %s",
+                (display, json.dumps(full_names, ensure_ascii=False), conv_id))
+            updated += cur.rowcount
+    conn.commit()
+    return updated
 
 
 def stream(path: Path, importer: Importer, tags: dict, label: str):
@@ -300,6 +491,8 @@ def main():
     parser.add_argument("--sms", default=str(PROJECT_ROOT / "data" / "smsdata.xml"))
     parser.add_argument("--calls", default=str(PROJECT_ROOT / "data" / "calldata.xml"))
     parser.add_argument("--media-dir", default=str(PROJECT_ROOT / "data" / "media"))
+    parser.add_argument("--rebuild-names", action="store_true",
+                        help="only recompute group conversation names, no import")
     args = parser.parse_args()
 
     load_dotenv(PROJECT_ROOT / ".env")
@@ -307,13 +500,25 @@ def main():
     media_dir.mkdir(parents=True, exist_ok=True)
 
     conn = connect()
+    ensure_schema(conn)
+
+    if args.rebuild_names:
+        try:
+            print(f"Group names rebuilt: {rebuild_group_names(conn)}")
+        finally:
+            conn.close()
+        return
+
     importer = Importer(conn, media_dir)
+    renamed = 0
     try:
         print("Importing...")
         stream(Path(args.sms), importer,
                {"sms": importer.handle_sms, "mms": importer.handle_mms}, "messages")
         stream(Path(args.calls), importer,
                {"call": importer.handle_call}, "calls")
+        importer.flush_names()
+        renamed = rebuild_group_names(conn)
     finally:
         conn.commit()
         conn.close()
@@ -323,6 +528,7 @@ def main():
           f"messages already present: {s['skipped']}")
     print(f"Calls added: {s['calls_new']}, already present: {s['calls_skipped']}")
     print(f"Media files written: {s['media_files']}")
+    print(f"Group conversations named: {renamed}")
 
 
 if __name__ == "__main__":

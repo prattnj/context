@@ -18,6 +18,16 @@ python scripts/import.py
 ```
 The script streams the XML (safe for multi-GB files), never modifies the
 source files, and is idempotent — re-run it any time to pick up new entries.
+It also adds any newer columns/tables itself, so an older database needs no
+manual migration.
+
+Group threads are named after their participants (e.g.
+`Alice, Bob, Carol & 3 others`), using contact names learned from 1:1 threads,
+call logs, and group contact lists; participants with no known name fall back
+to their formatted phone number. To recompute those names without re-importing:
+```sh
+python scripts/import.py --rebuild-names
+```
 MMS attachments are extracted to `./data/media/` as content-addressed files
 (`<sha1>.<ext>`) with metadata in the `media` table, so they stay
 machine-readable for future tooling.

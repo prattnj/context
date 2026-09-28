@@ -15,8 +15,24 @@ CREATE TABLE IF NOT EXISTS conversations (
   address_key   VARCHAR(512)     NOT NULL,
   display_name  VARCHAR(1024)    NOT NULL DEFAULT '',
   is_group      TINYINT(1)       NOT NULL DEFAULT 0,
+  -- Comma-joined normalized participant numbers. Same as address_key for
+  -- small groups, but kept separately because address_key is hashed when the
+  -- participant list is too long for its column.
+  participants      MEDIUMTEXT   NULL,
+  -- JSON array of resolved participant display names (full names, ordered to
+  -- match how display_name is built). NULL for 1:1 threads.
+  participant_names MEDIUMTEXT   NULL,
   PRIMARY KEY (id),
   UNIQUE KEY uq_conversations_address_key (address_key)
+) ENGINE=InnoDB;
+
+-- Best-known contact name for a phone number, harvested during import from
+-- 1:1 threads, call logs, and group MMS contact_name lists. Used to build
+-- readable group conversation names.
+CREATE TABLE IF NOT EXISTS contact_names (
+  number  VARCHAR(64)   NOT NULL,
+  name    VARCHAR(255)  NOT NULL,
+  PRIMARY KEY (number)
 ) ENGINE=InnoDB;
 
 -- Both SMS and MMS live here. Precomputed local-time buckets
